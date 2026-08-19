@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>전자기 유도 3D 시뮬레이터</title>
+    <!-- Three.js, Chart.js, SheetJS CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, sans-serif; }
+        body { display: flex; height: 100vh; background: #121212; color: #fff; overflow: hidden; }
+        #canvas-container { flex: 1; position: relative; }
+        #sidebar { width: 360px; background: #1e1e1e; padding: 20px; display: flex; flex-direction: column; gap: 12px; border-left: 1px solid #333; overflow-y: auto; }
+        h2 { font-size: 1.05rem; color: #007acc; border-bottom: 2px solid #007acc; padding-bottom: 4px; }
+        .control-group { display: flex; flex-direction: column; gap: 4px; }
+        .radio-group { display: flex; gap: 12px; margin-top: 2px; }
+        .radio-option { display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 0.85rem; color: #ccc; }
+        .radio-option input { cursor: pointer; }
+        label { font-size: 0.85rem; color: #ccc; }
+        select, input[type="range"], button { padding: 8px 12px; background: #2b2b2b; border: 1px solid #444; color: #fff; border-radius: 4px; font-size: 0.9rem; }
+        button { background: #007acc; font-weight: bold; cursor: pointer; border: none; transition: 0.2s; }
+        button:hover { background: #005999; }
+        .btn-excel { background: #107c41; }
+        .btn-excel:hover { background: #0b582e; }
+        #chart-wrapper { background: #252525; padding: 10px; border-radius: 6px; height: 180px; }
+        .info-panel { background: #2b2b2b; padding: 12px; border-radius: 6px; font-size: 0.82rem; line-height: 1.6; }
+        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; margin-top: 6px; }
+        .highlight { color: #007acc; font-weight: bold; }
+        .sub-header { color: #aaa; font-weight: bold; border-top: 1px dashed #444; margin-top: 6px; padding-top: 4px; grid-column: span 2; }
+        
+        @media (max-width: 768px) {
+            body { flex-direction: column; }
+            #sidebar { width: 100%; height: 50vh; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="canvas-container"></div>
+
+<div id="sidebar">
+    <h2>⚡ 전자기 유도 시뮬레이터</h2>
+    
+    <div class="control-group">
+        <label for="angle">경사로 각도 (θ): <span id="angle-val">20</span>°</label>
+        <input type="range" id="angle" min="5" max="60" value="20" step="1">
+    </div>
+
+    <!-- 출발 위치 선택 기능 추가 -->
+    <div class="control-group">
+        <label>경사로 출발 위치 선택</label>
+        <div class="radio-group">
+            <label class="radio-option">
+                <input type="radio" name="start-pos" value="0.0" checked> 끝에서 출발 (50cm 가속)
+            </label>
+            <label class="radio-option">
+                <input type="radio" name="start-pos" value="0.25"> 중간에서 출발 (25cm 가속)
+            </label>
+        </div>
+    </div>
+
+    <div class="control-group">
+        <label for="track-width">수평 ㄷ자 도선 선택</label>
+        <select id="track-width">
+            <option value="0.15">가로 50cm × 세로 15cm (L = 15cm)</option>
+            <option value="0.10">가로 50cm × 세로 10cm (L = 10cm)</option>
+        </select>
+    </div>
+
+    <div style="display: flex; gap: 8px;">
+        <button id="btn-start" style="flex: 1;">▶ 실험 시작</button>
+        <button id="btn-reset" style="flex: 1; background: #555;">🔄 리셋</button>
+    </div>
+
+    <button id="btn-download-excel" class="btn-excel">📥 Excel 데이터 다운로드</button>
+
+    <div class="info-panel">
+        <div><strong>실시간 데이터 정보</strong></div>
+        <div>위치 구역: <span id="val-zone" class="highlight">대기 중</span></div>
+        <div>자기장의 세기 (B): <span class="highlight" id="val-b">0.50</span> T <span style="font-size:0.75rem; color:#ffd700;">(↓ N→S 방향)</span></div>
+
+        <div class="info-grid">
+            <div class="sub-header">🚀 속도 (v)</div>
+            <div>현재: <span id="val-v">0.000</span> m/s</div>
+            <div>최대: <span id="val-v-max">0.000</span> m/s</div>
+            <div style="grid-column: span 2;">평균: <span id="val-v-avg">0.000</span> m/s</div>
+
+            <div class="sub-header">⚡ 유도 기전력 (ε)</div>
+            <div>현재: <span id="val-emf">0.0000</span> V</div>
+            <div>최대: <span id="val-emf-max">0.0000</span> V</div>
+            <div style="grid-column: span 2;">자석구간 평균: <span id="val-emf-avg">0.0000</span> V</div>
+
+            <div class="sub-header">🔋 유도 전류 (I)</div>
+            <div>현재: <span id="val-i">0.0000</span> A</div>
+            <div>최대: <span id="val-i-max">0.0000</span> A</div>
+            <div style="grid-column: span 2;">자석구간 평균: <span id="val-i-avg">0.0000</span> A</div>
+        </div>
+    </div>
+
+    <h2>📈 실시간 유도 전류 (I)</h2>
+    <div id="chart-wrapper">
+        <canvas id="currentChart"></canvas>
+    </div>
+</div>
+
+<script>
+// --- 물리 상수 ---
+const g = 9.8, m = 0.2, B = 0.5, R = 0.1, mu = 0.05;
+const rampLength = 0.5; // 경사로 전체 길이 (50cm)
+const trackLength = 0.5; // ㄷ자 도선 길이 (50cm)
+
+// 자석 설치 구간 (수평 x좌표 기준 10cm ~ 40cm)
+const magnetStart = 0.10;
+const magnetEnd = 0.40;
+
+let theta = 20 * Math.PI / 180, L = 0.15;
+let startOffset = 0.0; // 출발 offset (0.0: 끝, 0.25: 중간)
+let state = "ramp"; 
+let xRamp = 0, xTrack = 0, v = 0, t = 0;
+let isRunning = false;
+let historyData = [];
+
+// 통계 집계용 배열
+let vArray = [];
+let magnetEmfArray = [];
+let magnetIArray = [];
+
+// --- Three.js 3D 환경 구축 ---
+const container = document.getElementById('canvas-container');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x121212);
+
+const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 100);
+camera.position.set(0.3, 0.8, 1.6);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(container.clientWidth, container.clientHeight);
+container.appendChild(renderer.domElement);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(0.1, 0, 0);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(2, 4, 2);
+scene.add(dirLight);
+
+// --- 재질 ---
+const boxMat = new THREE.MeshStandardMaterial({ color: 0xc2a675, roughness: 0.8 });
+const copperMat = new THREE.MeshStandardMaterial({ color: 0xcd7f32, metalness: 0.8 });
+const rodMat = new THREE.MeshStandardMaterial({ color: 0xd0d0d0, metalness: 0.9 });
+
+// 자석 재질 (N극: 빨간색, S극: 파란색)
+const nMagnetMat = new THREE.MeshStandardMaterial({ color: 0xee3333, metalness: 0.3, roughness: 0.4 });
+const sMagnetMat = new THREE.MeshStandardMaterial({ color: 0x3366ee, metalness: 0.3, roughness: 0.4 });
+
+// 1. 경사로 피벗
+const rampPivot = new THREE.Group();
+rampPivot.position.set(0, 0, 0);
+scene.add(rampPivot);
+
+const rampBoard = new THREE.Mesh(new THREE.BoxGeometry(rampLength, 0.02, 0.5), boxMat);
+rampBoard.position.set(-rampLength / 2, -0.01, 0);
+rampPivot.add(rampBoard);
+
+// 2. 수평 ㄷ자 도선 판
+const flatBoard = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.02, 0.5), boxMat);
+flatBoard.position.set(0.3, -0.01, 0);
+scene.add(flatBoard);
+
+let uTrackGroup = new THREE.Group();
+scene.add(uTrackGroup);
+
+function createUTrack(width) {
+    while(uTrackGroup.children.length > 0) uTrackGroup.remove(uTrackGroup.children[0]);
+    const r1 = new THREE.Mesh(new THREE.BoxGeometry(trackLength, 0.01, 0.01), copperMat);
+    r1.position.set(trackLength / 2, 0.005, width / 2);
+    const r2 = new THREE.Mesh(new THREE.BoxGeometry(trackLength, 0.01, 0.01), copperMat);
+    r2.position.set(trackLength / 2, 0.005, -width / 2);
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, width), copperMat);
+    b.position.set(trackLength, 0.005, 0);
+    uTrackGroup.add(r1, r2, b);
+}
+createUTrack(L);
+
+// 3. 자석 배치 (0.1m ~ 0.4m 영역) & 극성 구분
+const m1 = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.02, 0.3), nMagnetMat);
+m1.position.set(0.25, 0.12, 0);
+
+const m2 = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.02, 0.3), sMagnetMat);
+m2.position.set(0.25, -0.08, 0);
+scene.add(m1, m2);
+
+// 3-1. 자기장 방향 화살표 표시
+const arrowDir = new THREE.Vector3(0, -1, 0);
+const arrowColor = 0xffd700;
+const arrowLen = 0.16;
+
+for (let xPos of [0.15, 0.25, 0.35]) {
+    const arrowHelper = new THREE.ArrowHelper(
+        arrowDir,
+        new THREE.Vector3(xPos, 0.10, 0),
+        arrowLen,
+        arrowColor,
+        0.03,
+        0.02
+    );
+    scene.add(arrowHelper);
+}
+
+// 4. 원통형 막대 피벗 계층 구조
+const rodRadius = 0.008;
+const rodGroup = new THREE.Group();
+const rodRollGroup = new THREE.Group();
+
+const rodMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(rodRadius, rodRadius, 0.6, 32), 
+    rodMat
+);
+rodMesh.rotation.x = Math.PI / 2;
+
+rodRollGroup.add(rodMesh);
+rodGroup.add(rodRollGroup);
+scene.add(rodGroup);
+
+// --- Chart.js ---
+const ctx = document.getElementById('currentChart').getContext('2d');
+const chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: [],
+        datasets: [{
+            label: '유도 전류 I (A)',
+            data: [],
+            borderColor: '#007acc',
+            backgroundColor: 'rgba(0, 122, 204, 0.2)',
+            fill: true,
+            pointRadius: 0
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+            x: { title: { display: true, text: '시간 (s)', color: '#888' }, ticks: { color: '#888' } },
+            y: { title: { display: true, text: '전류 (A)', color: '#888' }, ticks: { color: '#888' }, beginAtZero: true }
+        }
+    }
+});
+
+// --- 위치 및 시각화 업데이트 ---
+function updateRampAngle() {
+    const deg = parseFloat(document.getElementById('angle').value);
+    document.getElementById('angle-val').innerText = deg;
+    theta = deg * Math.PI / 180;
+    rampPivot.rotation.z = -theta;
+}
+
+function updateRodPosition() {
+    if (state === "ramp") {
+        const distFromBottom = rampLength - xRamp;
+        const posX = -distFromBottom * Math.cos(theta);
+        const posY = distFromBottom * Math.sin(theta) + rodRadius;
+        
+        rodGroup.position.set(posX, posY, 0);
+        rodGroup.rotation.z = -theta;
+        rodRollGroup.rotation.z = xRamp / rodRadius;
+    } else {
+        rodGroup.position.set(xTrack, rodRadius + 0.005, 0);
+        rodGroup.rotation.z = 0;
+        rodRollGroup.rotation.z = (rampLength + xTrack) / rodRadius;
+    }
+}
+
+function resetSim() {
+    isRunning = false;
+    state = "ramp";
+    xRamp = startOffset; // 선택한 출발 위치 적용 (0.0m 또는 0.25m)
+    xTrack = 0;
+    v = 0;
+    t = 0;
+    historyData = [];
+    
+    vArray = [];
+    magnetEmfArray = [];
+    magnetIArray = [];
+
+    updateRampAngle();
+    updateRodPosition();
+    
+    chart.data.labels = [];
+    chart.data.datasets[0].data = [];
+    chart.update();
+    
+    const posName = startOffset === 0.0 ? "끝점(50cm)" : "중간점(25cm)";
+    document.getElementById('val-zone').innerText = `경사로 ${posName} 대기 중`;
+    document.getElementById('val-b').innerText = B.toFixed(2);
+    
+    document.getElementById('val-v').innerText = "0.000";
+    document.getElementById('val-v-max').innerText = "0.000";
+    document.getElementById('val-v-avg').innerText = "0.000";
+
+    document.getElementById('val-emf').innerText = "0.0000";
+    document.getElementById('val-emf-max').innerText = "0.0000";
+    document.getElementById('val-emf-avg').innerText = "0.0000";
+
+    document.getElementById('val-i').innerText = "0.0000";
+    document.getElementById('val-i-max').innerText = "0.0000";
+    document.getElementById('val-i-avg').innerText = "0.0000";
+}
+
+// --- 물리 연산 Engine ---
+const dt = 0.01;
+function stepPhysics() {
+    if (!isRunning) return;
+
+    let emf = 0;
+    let current = 0;
+
+    if (state === "ramp") {
+        const accel = g * (Math.sin(theta) - mu * Math.cos(theta));
+        v += accel * dt;
+        xRamp += v * dt;
+        t += dt;
+        
+        document.getElementById('val-zone').innerText = "경사로 가속 중";
+
+        if (xRamp >= rampLength) {
+            state = "track";
+            xTrack = 0;
+        }
+    } else if (state === "track") {
+        const inMagnetZone = (xTrack >= magnetStart && xTrack <= magnetEnd);
+        
+        let magneticDamping = 0;
+        if (inMagnetZone) {
+            magneticDamping = (Math.pow(B, 2) * Math.pow(L, 2) / R) * v;
+            emf = B * L * v;
+            current = emf / R;
+            
+            magnetEmfArray.push(emf);
+            magnetIArray.push(current);
+        }
+
+        const friction = mu * m * g;
+        const accel = -(magneticDamping + friction) / m;
+
+        v += accel * dt;
+        if (v < 0) v = 0;
+        
+        xTrack += v * dt;
+        t += dt;
+
+        document.getElementById('val-zone').innerText = inMagnetZone ? "자석 영역 통과 중 (전류 발생)" : "수평 도선 이동 중";
+
+        if (xTrack >= trackLength || v === 0) {
+            if (xTrack >= trackLength) xTrack = trackLength;
+            isRunning = false;
+            document.getElementById('val-zone').innerText = "실험 완료";
+        }
+
+        chart.data.labels.push(t.toFixed(2));
+        chart.data.datasets[0].data.push(current.toFixed(4));
+        chart.update('none');
+    }
+
+    vArray.push(v);
+    updateRodPosition();
+
+    // 통계 연산
+    const vMax = Math.max(...vArray);
+    const vAvg = vArray.reduce((a, b) => a + b, 0) / vArray.length;
+
+    const emfMax = magnetEmfArray.length > 0 ? Math.max(...magnetEmfArray) : 0;
+    const emfAvg = magnetEmfArray.length > 0 ? (magnetEmfArray.reduce((a, b) => a + b, 0) / magnetEmfArray.length) : 0;
+
+    const iMax = magnetIArray.length > 0 ? Math.max(...magnetIArray) : 0;
+    const iAvg = magnetIArray.length > 0 ? (magnetIArray.reduce((a, b) => a + b, 0) / magnetIArray.length) : 0;
+
+    const accelDist = (rampLength - startOffset).toFixed(2);
+
+    // 히스토리 기록 (가속 거리 항목 추가)
+    historyData.push({
+        "시간_t(s)": t.toFixed(2),
+        "경사각_θ(°)": (theta * 180 / Math.PI).toFixed(0),
+        "가속거리(m)": accelDist,
+        "자기장_B(T)": B,
+        "도선폭_L(m)": L,
+        "속도_v(m/s)": v.toFixed(4),
+        "최대속도(m/s)": vMax.toFixed(4),
+        "평균속도(m/s)": vAvg.toFixed(4),
+        "유도기전력_ε(V)": emf.toFixed(4),
+        "최대유도기전력(V)": emfMax.toFixed(4),
+        "평균유도기전력(V)": emfAvg.toFixed(4),
+        "유도전류_I(A)": current.toFixed(4),
+        "최대유도전류(A)": iMax.toFixed(4),
+        "평균유도전류(A)": iAvg.toFixed(4)
+    });
+
+    // UI 실시간 업데이트
+    document.getElementById('val-v').innerText = v.toFixed(3);
+    document.getElementById('val-v-max').innerText = vMax.toFixed(3);
+    document.getElementById('val-v-avg').innerText = vAvg.toFixed(3);
+
+    document.getElementById('val-emf').innerText = emf.toFixed(4);
+    document.getElementById('val-emf-max').innerText = emfMax.toFixed(4);
+    document.getElementById('val-emf-avg').innerText = emfAvg.toFixed(4);
+
+    document.getElementById('val-i').innerText = current.toFixed(4);
+    document.getElementById('val-i-max').innerText = iMax.toFixed(4);
+    document.getElementById('val-i-avg').innerText = iAvg.toFixed(4);
+}
+
+// --- 이벤트 핸들러 ---
+document.getElementById('angle').addEventListener('input', () => { updateRampAngle(); resetSim(); });
+
+document.querySelectorAll('input[name="start-pos"]').forEach(radio => {
+    radio.addEventListener('change', (e) => {
+        startOffset = parseFloat(e.target.value);
+        resetSim();
+    });
+});
+
+document.getElementById('track-width').addEventListener('change', (e) => { L = parseFloat(e.target.value); createUTrack(L); resetSim(); });
+document.getElementById('btn-start').addEventListener('click', () => { if (!isRunning && (xTrack >= trackLength || v === 0 && state === "track")) resetSim(); isRunning = true; });
+document.getElementById('btn-reset').addEventListener('click', resetSim);
+
+document.getElementById('btn-download-excel').addEventListener('click', () => {
+    if (historyData.length === 0) {
+        alert("다운로드할 데이터가 없습니다. 먼저 실험을 진행해 주세요.");
+        return;
+    }
+    const accelDistCm = ((rampLength - startOffset) * 100).toFixed(0);
+    const worksheet = XLSX.utils.json_to_sheet(historyData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "측정데이터");
+    XLSX.writeFile(workbook, `전자기유도_데이터_(각도${(theta*180/Math.PI).toFixed(0)}도_가속거리${accelDistCm}cm_폭${L*100}cm).xlsx`);
+});
+
+resetSim();
+
+function animate() {
+    requestAnimationFrame(animate);
+    stepPhysics();
+    controls.update();
+    renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
+});
+</script>
+</body>
+</html>
